@@ -1,0 +1,94 @@
+import json
+from datetime import datetime
+
+
+def load():
+    try:
+        with open('applications.json', 'r', encoding='utf-8') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return []
+
+
+def save(data):
+    with open('applications.json', 'w', encoding='utf-8') as file:
+        json.dump(data, file, ensure_ascii=False, indent=4)
+
+
+def add_application(company, position, url='', notes=''):
+    appls = load()
+    application = {
+        'id': len(appls) + 1,
+        'company': company,
+        'position': position,
+        'status': 'applied',
+        'url': url,
+        'applied_at': datetime.now().strftime('%Y-%m-%d'),
+        'notes': notes
+    }
+    appls.append(application)
+    save(appls)
+    return f'''Отклик #{application['id']} добавлен: {application['company']} - {application['position']}'''
+
+
+def list_applications(status=''):
+    appls = load()
+    statuses = ['applied', 'interview', 'offer', 'rejected', 'ghosted']
+    if appls:
+        if status:
+            if status in statuses:
+                application = [f'''#{appl['id']} | {appl['company']} | {appl['position']} | {appl['applied_at']} | {appl['status']}\nЗаметка: {appl['notes'] if appl['notes'] else 'нет'} \nУточняющая ссылка: {appl['url'] if appl['url'] else 'нет'}''' for appl in appls if appl['status'] == status]
+                if not application:
+                    return f'''Откликов на вакансии со статусом "{status}" отсутствуют'''
+            else:
+                return 'Неверно передан статус для фильтрации'
+        else:
+            application = [f'''#{appl['id']} | {appl['company']} | {appl['position']} | {appl['applied_at']} | {appl['status']}\nЗаметка: {appl['notes'] if appl['notes'] else 'нет'} \nУточняющая ссылка: {appl['url'] if appl['url'] else 'нет'}''' for appl in appls]
+    else:
+        return 'На данный момент откликов на вакансии нет'
+    return '\n'.join(application)
+
+
+def update_status(id, status):
+    appls = load()
+    statuses = ['applied', 'interview', 'offer', 'rejected', 'ghosted']
+    if status in statuses:
+        if appls:
+            appl = [appl for appl in appls if str(appl['id']) == str(id)]
+            if appl:
+                appl[0]['status'] = status
+                save(appls)
+            else:
+                return f'''Отклика на вакансию с id:{id} -  нет'''
+        else:
+            return 'На данный момент откликов на вакансии нет'
+    else:
+        return f'''Статус: "{status}" нет в предусмотренных для установки на отклики'''
+    return f'''Отклик #{id} -> {status}'''
+
+
+def get_stats():
+    appls = load()
+    if appls:
+        applied = len([appl for appl in appls if appl['status'] == 'applied'])
+        interview = len([appl for appl in appls if appl['status'] == 'interview'])
+        offer = len([appl for appl in appls if appl['status'] == 'offer'])
+        rejected = len([appl for appl in appls if appl['status'] == 'rejected'])
+        ghosted = len([appl for appl in appls if appl['status'] == 'ghosted'])
+    else:
+        return 'На данный момент откликов на вакансии нет'
+    return f'''applied: {applied}\ninterview: {interview}\noffer: {offer}\nrejected: {rejected}\nghosted: {ghosted}\nВсего: {len(appls)}'''
+
+
+def followups(days=7):
+    appls = load()
+    if appls:
+        try:
+            appls_deadline = [f'''#{appl['id']} | {appl['company']} | {appl['position']} | {appl['applied_at']} | {appl['status']}''' for appl in appls if (appl['status'] == 'applied' or appl['status'] == 'interview') and (datetime.now() - datetime.strptime(appl['applied_at'], '%Y-%m-%d')).days >= days]
+            if not appls_deadline:
+                return 'Пока нечего напоминать'
+            return '\n'.join(appls_deadline)
+        except ValueError:
+            return 'Упс... пришла битая или пустая дата'
+    else:
+        return 'На данный момент откликов на вакансии нет'

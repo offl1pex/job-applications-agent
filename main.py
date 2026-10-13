@@ -1,0 +1,215 @@
+from dotenv import load_dotenv
+load_dotenv()
+from openai import OpenAI
+import json
+from applications import add_application, list_applications, update_status, get_stats, followups
+
+
+class Agent:
+    def __init__(self):
+        self.messages = [{
+            'role': 'system',
+            'content': '''Ты Job Applications Agent — помощник по учёту откликов на вакансии.
+Статусы только: applied, interview, offer, rejected, ghosted.
+
+Какой инструмент вызывать:
+- «добавь отклик / подался в...» → add_application
+- «покажи отклики / список» → list_applications
+- «статистика / сколько» → get_stats
+- «что напомнить / follow-up / давно без ответа» → followups
+- смена статуса → update_status (нужен id из списка)
+- если id неизвестен — сначала list_applications
+
+Отвечай кратко. Не выдумывай id и статусы.
+Когда показываешь список откликов, перечисляй все поля из результата tool:
+id, компания, должность, дата, статус, заметка, ссылка.
+Не сокращай и не выкидывай пустые заметки — пиши «нет».'''
+        }]
+
+        self.client = OpenAI()
+        self.tools = [{
+            'type': 'function',
+            'function': {
+                'name':  'add_application',
+                'description': 'Добавить новый отклик на вакансию. Вызывать, когда пользователь сообщает, что откликнулся в компанию.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'company': {
+                            'type': 'string',
+                            'description': 'Название компании'
+                        },
+                        'position': {
+                            'type': 'string',
+                            'description': 'Название должности / вакансии'
+                        },
+                        'url': {
+                            'type': 'string',
+                            'description': 'Ссылка на вакансию, если есть'
+                        },
+                        'notes': {
+                            'type': 'string',
+                            'description': 'Заметка по отклику, если есть'
+                        },
+                    },
+                    'required': ['company', 'position']
+                }
+            }
+        }, {
+            'type': 'function',
+            'function': {
+                'name':  'list_applications',
+                'description': 'Показать список откликов с id, компанией, должностью, датой и статусом. Вызывать, когда просят показать, вывести или перечислить отклики.В ответе пользователю нужно передать все поля из результата функции, включая заметки и ссылки.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'status': {
+                            'type': 'string',
+                            'description': 'Фильтр по статусу: applied, interview, offer, rejected, ghosted. Если не указан — показать все.'
+                        }
+                    },
+                    'required': []
+                }
+            }
+        }, {
+            'type': 'function',
+            'function': {
+                'name':  'update_status',
+                'description': 'Изменить статус отклика по id. Статусы только: applied, interview, offer, rejected, ghosted.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {
+                            'type': 'integer',
+                            'description': 'id отклика из списка'
+                        },
+                        'status': {
+                            'type': 'string',
+                            'description': 'Новый статус: applied, interview, offer, rejected или ghosted'
+                        },
+                    },
+                    'required': ['id', 'status']
+                }
+            }
+        }, {
+            'type': 'function',
+            'function': {
+                'name':  'get_stats',
+                'description': 'Краткая статистика: сколько откликов в каждом статусе и всего. Вызывать, когда просят статистику, итог или «сколько откликов».',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                    },
+                    'required': []
+                }
+            }
+        }, {
+            'type': 'function',
+            'function': {
+                'name':  'followups',
+                'description': 'Показать отклики со статусом applied или interview, по которым давно нет движения. Вызывать, когда просят напомнить, follow-up или «где давно тишина».',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'days': {
+                            'type': 'integer',
+                            'description': 'Сколько дней без обновления считать «давно». По умолчанию 7, если пользователь не указал.'
+                        }
+                    },
+                    'required': []
+                }
+            }
+        }
+        ]
+
+    def load_messages(self):
+        try:
+            with open('chat.json', 'r', encoding='utf-8') as file:
+                self.messages = json.load(file)
+        except FileNotFoundError:
+            with open('chat.json', 'w', encoding='utf-8') as file:
+                json.dump(self.messages, file, ensure_ascii=False, indent=4)
+
+    def save(self):
+        with open('chat.json', 'w', encoding='utf-8') as file:
+            json.dump(self.messages, file, ensure_ascii=False, indent=4)
+
+    def clear(self):
+        with open('chat.json', 'w', encoding='utf-8') as file:
+            json.dump([self.messages[0]], file, ensure_ascii=False, indent=4)
+        return 'Успешная очистка истории'
+
+    def ask_model(self):
+        response = self.client.chat.completions.create(
+            model='gpt-4.1-mini',
+            tools=self.tools,
+            max_completion_tokens=300,
+            messages=self.messages
+        )
+
+        return response.choices[0].message
+
+    def run_tool(self, name, args):
+        try:
+            if name == 'add_application':
+                result = add_application(args['company'], args['position'], args.get('url', ''), args.get('notes', ''))
+                return result
+            elif name == 'list_applications':
+                result = list_applications(args.get('status', ''))
+                return result
+            elif name == 'update_status':
+                result = update_status(args['id'], args['status'])
+                return result
+            elif name == 'get_stats':
+                result = get_stats()
+                return result
+            elif name == 'followups':
+                result = followups(args.get('days') or 7)
+                return result
+            else:
+                return 'Неизвестная инструкция'
+        except KeyError:
+            return 'Неверно переданы аргументы'
+
+    def handle_tool_calls(self, message):
+        for call in message.tool_calls:
+            name = call.function.name
+            args = json.loads(call.function.arguments)
+            result = self.run_tool(name, args)
+            self.messages.append({
+                'role': 'tool',
+                'tool_call_id': call.id,
+                'content': result
+            })
+        return self.ask_model()
+
+    def chat(self, user_message):
+        self.messages.append({
+            'role': 'user',
+            'content': user_message
+        })
+        message = self.ask_model()
+        if message.tool_calls:
+            self.messages.append(message.model_dump())
+            message = self.handle_tool_calls(message)
+        self.messages.append({
+            'role': 'assistant',
+            'content': message.content
+        })
+        return message.content
+
+    def run(self):
+        self.load_messages()
+        user_message = input('Ваш ввод: ')
+        while user_message != 'выход':
+            if user_message == 'сброс':
+                print(self.clear())
+                self.messages = [self.messages[0]]
+            else:
+                print(self.chat(user_message))
+                self.save()
+            user_message = input('Ваш ввод: ')
+
+
+agent = Agent()
+agent.run()
