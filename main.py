@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from openai import OpenAI
 import json
-from applications import add_application, list_applications, update_status, get_stats, followups
+from applications import add_application, list_applications, update_status, get_stats, followups, edit_application, delete_application
 
 
 class Agent:
@@ -19,6 +19,8 @@ class Agent:
 - «что напомнить / follow-up / давно без ответа» → followups
 - смена статуса → update_status (нужен id из списка)
 - если id неизвестен — сначала list_applications
+- изменить отклик → edit_application
+- удалить отклик → delete_application
 
 Отвечай кратко. Не выдумывай id и статусы.
 Когда показываешь список откликов, перечисляй все поля из результата tool:
@@ -119,18 +121,76 @@ id, компания, должность, дата, статус, заметка
                     'required': []
                 }
             }
+        }, {
+            'type': 'function',
+            'function': {
+                'name': 'edit_application',
+                'description': 'Изменить поля отклика по id: company, position, url, notes. Меняются только переданные поля.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {
+                            'type': 'integer',
+                            'description': 'id отклика'
+                        },
+                        'company': {
+                            'type': 'string',
+                            'description': 'Название компании'
+                        },
+                        'position': {
+                            'type': 'string',
+                            'description': 'Должность в компании'
+                        },
+                        'url': {
+                            'type': 'string',
+                            'description': 'Ссылка на вакансию'
+                        },
+                        'notes': {
+                            'type': 'string',
+                            'description': 'Заметка по отклику'
+                        }
+                    },
+                    'required': ['id']
+                }
+            }
+        }, {
+            'type': 'function',
+            'function': {
+                'name': 'delete_application',
+                'description': 'Удалить отклик по id. Вызывать, когда пользователь просит удалить заявку.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {
+                            'type': 'integer',
+                            'description': 'id отклика'
+                        }
+                    },
+                    'required': ['id']
+                }
+            }
         }
         ]
+
+    def trim_history(self):
+        system = self.messages[0]
+        other = self.messages[1:][-20:]
+        n = -20
+        while other and other[0].get('role') == 'tool':
+            n-=1
+            other = self.messages[1:][n:]
+        self.messages = [system] + other
 
     def load_messages(self):
         try:
             with open('chat.json', 'r', encoding='utf-8') as file:
-                self.messages = json.load(file)
+                self.messages = [self.messages[0]] + json.load(file)[1:]
         except FileNotFoundError:
             with open('chat.json', 'w', encoding='utf-8') as file:
                 json.dump(self.messages, file, ensure_ascii=False, indent=4)
 
     def save(self):
+        self.trim_history()
         with open('chat.json', 'w', encoding='utf-8') as file:
             json.dump(self.messages, file, ensure_ascii=False, indent=4)
 
@@ -143,7 +203,7 @@ id, компания, должность, дата, статус, заметка
         response = self.client.chat.completions.create(
             model='gpt-4.1-mini',
             tools=self.tools,
-            max_completion_tokens=300,
+            max_completion_tokens=800,
             messages=self.messages
         )
 
@@ -166,6 +226,12 @@ id, компания, должность, дата, статус, заметка
             elif name == 'followups':
                 result = followups(args.get('days') or 7)
                 return result
+            elif name == 'edit_application':
+                result = edit_application(args['id'], args.get('company', ''), args.get('position', ''), args.get('url', ''), args.get('notes', ''))
+                return result
+            elif name == 'delete_application':
+                result = delete_application(args['id'])
+                return result
             else:
                 return 'Неизвестная инструкция'
         except KeyError:
@@ -174,8 +240,11 @@ id, компания, должность, дата, статус, заметка
     def handle_tool_calls(self, message):
         for call in message.tool_calls:
             name = call.function.name
-            args = json.loads(call.function.arguments)
-            result = self.run_tool(name, args)
+            try:
+                args = json.loads(call.function.arguments)
+                result = self.run_tool(name, args)
+            except json.JSONDecodeError:
+                result = 'Не удалось разобрать аргументы'
             self.messages.append({
                 'role': 'tool',
                 'tool_call_id': call.id,

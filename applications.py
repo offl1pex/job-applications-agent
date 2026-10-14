@@ -17,18 +17,56 @@ def save(data):
 
 def add_application(company, position, url='', notes=''):
     appls = load()
-    application = {
-        'id': len(appls) + 1,
-        'company': company,
-        'position': position,
-        'status': 'applied',
-        'url': url,
-        'applied_at': datetime.now().strftime('%Y-%m-%d'),
-        'notes': notes
-    }
-    appls.append(application)
-    save(appls)
-    return f'''Отклик #{application['id']} добавлен: {application['company']} - {application['position']}'''
+    company = company.strip()
+    position = position.strip()
+    if company and position:
+        application = {
+            'id': len(appls) + 1,
+            'company': company,
+            'position': position,
+            'status': 'applied',
+            'url': url,
+            'applied_at': datetime.now().strftime('%Y-%m-%d'),
+            'notes': notes
+        }
+        appls.append(application)
+        save(appls)
+        return f'''Отклик #{application['id']} добавлен: {application['company']} - {application['position']}'''
+    else:
+        return 'Название компании или должности не должны быть пустыми!'
+
+
+def edit_application(id, company='', position='', url='', notes=''):
+    appls = load()
+    if appls:
+        for appl in appls:
+            if str(appl['id']) == str(id):
+                if company:
+                    appl['company'] = company
+                if position:
+                    appl['position'] = position
+                if url:
+                    appl['url'] = url
+                if notes:
+                    appl['notes'] = notes
+                save(appls)
+                return f'''Отклик #{id} теперь имеет вид: {appl['company']} | {appl['position']} | {appl['notes']} | {appl['status']} | {appl['applied_at']}'''
+        return f'''Отклика #{id} нет в системе'''
+    else:
+        return 'На данный момент откликов на вакансии нет'
+
+
+def delete_application(id):
+    appls = load()
+    if appls:
+        for i in range(len(appls)):
+            if str(appls[i]['id']) == str(id):
+                del appls[i]
+                save(appls)
+                return f'''Удален отклик #{id}'''
+        return f'''Отклика #{id} нет в системе'''
+    else:
+        return 'На данный момент откликов на вакансии нет'
 
 
 def list_applications(status=''):
