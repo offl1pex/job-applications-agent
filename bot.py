@@ -17,6 +17,39 @@ HISTORY_DIR = Path(__file__).resolve().parent / "chat_histories"
 HISTORY_DIR.mkdir(exist_ok=True)
 APPS_DIR = Path(__file__).resolve().parent / "applications"
 APPS_DIR.mkdir(exist_ok=True)
+START_TEXT = """Job Applications Agent
+
+Умею:
+• вести отклики (добавить, список, статус, правка, удалить)
+• статистику и follow-up
+• отвечать по базе docs (Python, агенты, вакансии)
+
+Примеры:
+• добавь отклик в Yandex на Python Developer
+• покажи отклики
+• переведи 1 в interview
+• что такое tool_calls
+
+Команды:
+/help — справка
+/reset — сброс истории диалога
+"""
+
+HELP_TEXT = """Отклики:
+• добавь отклик в Company на Position
+• покажи отклики / покажи applied
+• переведи 2 в interview
+• измени заметку у 1 на …
+• удали отклик 3
+• статистика
+• что напомнить
+
+База знаний:
+• что такое список в Python
+• кто такой AI-агент
+
+/reset — очистить историю этого чата
+"""
 
 agents = {}
 
@@ -32,11 +65,11 @@ def get_agent(chat_id):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Job Agent в Telegram.\n"
-        "Пиши как в консоли: отклики, вопросы по базе docs.\n"
-        "/reset — сброс истории чата"
-    )
+    await update.message.reply_text(START_TEXT)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(HELP_TEXT)
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,7 +77,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent = get_agent(chat_id)
     agent.clear()
     agent.messages = [agent.messages[0]]
-    await update.message.reply_text("История сброшена.")
+    await update.message.reply_text("История сброшена. Можешь начать с «добавь отклик…» или /help.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -69,7 +102,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(answer)
         agent.save()  # история + trim, как в консоли
     except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
+        print(f"Error chat_id={chat_id}: {e}")  # себе в терминал
+        await update.message.reply_text(
+            "Что-то пошло не так. Попробуй ещё раз или /reset.")
 
 
 def main():
@@ -79,6 +114,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
