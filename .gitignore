@@ -4,3 +4,6 @@ __pycache__/
 .env
 chat.json
 applications.json
+chat_histories/
+applications/
+embeddings.json

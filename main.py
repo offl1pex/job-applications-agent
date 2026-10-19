@@ -1,12 +1,16 @@
 from dotenv import load_dotenv
 load_dotenv()
-from openai import OpenAI
+from openai import AsyncOpenAI
+import asyncio
 import json
 from applications import add_application, list_applications, update_status, get_stats, followups, edit_application, delete_application
+from search import search_docs
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, history_path='chat.json', apps_path='applications.json'):
+        self.history_path = history_path
+        self.apps_path = apps_path
         self.messages = [{
             'role': 'system',
             'content': '''Ты Job Applications Agent — помощник по учёту откликов на вакансии.
@@ -25,10 +29,14 @@ class Agent:
 Отвечай кратко. Не выдумывай id и статусы.
 Когда показываешь список откликов, перечисляй все поля из результата tool:
 id, компания, должность, дата, статус, заметка, ссылка.
-Не сокращай и не выкидывай пустые заметки — пиши «нет».'''
+Не сокращай и не выкидывай пустые заметки — пиши «нет».
+
+Если вопрос про факты из базы знаний (Python, агенты, вакансии, термины) — сначала search_docs.
+Отвечай по результату search_docs. Если «Ничего не найдено» — так и скажи, не выдумывай.
+Заявки и статусы откликов — через tools откликов, не через search_docs.'''
         }]
 
-        self.client = OpenAI()
+        self.client = AsyncOpenAI()
         self.tools = [{
             'type': 'function',
             'function': {
@@ -169,7 +177,27 @@ id, компания, должность, дата, статус, заметка
                     'required': ['id']
                 }
             }
+        }, {
+    'type': 'function',
+    'function': {
+        'name': 'search_docs',
+        'description': (
+            'Поиск по базе документов (docs). '
+            'Вызывать для вопросов о терминах, Python, AI-агентах, откликах как теме — '
+            'когда нужна информация из текстовой базы, а не список заявок пользователя.'
+        ),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'query': {
+                    'type': 'string',
+                    'description': 'Ключевая фраза или вопрос для смыслового поиска по документам'
+                }
+            },
+            'required': ['query']
         }
+    }
+}
         ]
 
     def trim_history(self):
@@ -183,24 +211,24 @@ id, компания, должность, дата, статус, заметка
 
     def load_messages(self):
         try:
-            with open('chat.json', 'r', encoding='utf-8') as file:
+            with open(self.history_path, 'r', encoding='utf-8') as file:
                 self.messages = [self.messages[0]] + json.load(file)[1:]
         except FileNotFoundError:
-            with open('chat.json', 'w', encoding='utf-8') as file:
+            with open(self.history_path, 'w', encoding='utf-8') as file:
                 json.dump(self.messages, file, ensure_ascii=False, indent=4)
 
     def save(self):
         self.trim_history()
-        with open('chat.json', 'w', encoding='utf-8') as file:
+        with open(self.history_path, 'w', encoding='utf-8') as file:
             json.dump(self.messages, file, ensure_ascii=False, indent=4)
 
     def clear(self):
-        with open('chat.json', 'w', encoding='utf-8') as file:
+        with open(self.history_path, 'w', encoding='utf-8') as file:
             json.dump([self.messages[0]], file, ensure_ascii=False, indent=4)
         return 'Успешная очистка истории'
 
-    def ask_model(self):
-        response = self.client.chat.completions.create(
+    async def ask_model(self):
+        response = await self.client.chat.completions.create(
             model='gpt-4.1-mini',
             tools=self.tools,
             max_completion_tokens=800,
@@ -212,32 +240,28 @@ id, компания, должность, дата, статус, заметка
     def run_tool(self, name, args):
         try:
             if name == 'add_application':
-                result = add_application(args['company'], args['position'], args.get('url', ''), args.get('notes', ''))
-                return result
+                result = add_application(args['company'], args['position'], args.get('url', ''), args.get('notes', ''), path=self.apps_path)
             elif name == 'list_applications':
-                result = list_applications(args.get('status', ''))
-                return result
+                result = list_applications(args.get('status', ''), path=self.apps_path)
             elif name == 'update_status':
-                result = update_status(args['id'], args['status'])
-                return result
+                result = update_status(args['id'], args['status'], path=self.apps_path)
             elif name == 'get_stats':
-                result = get_stats()
-                return result
+                result = get_stats(path=self.apps_path)
             elif name == 'followups':
-                result = followups(args.get('days') or 7)
-                return result
+                result = followups(args.get('days') or 7, path=self.apps_path)
             elif name == 'edit_application':
-                result = edit_application(args['id'], args.get('company', ''), args.get('position', ''), args.get('url', ''), args.get('notes', ''))
-                return result
+                result = edit_application(args['id'], args.get('company', ''), args.get('position', ''), args.get('url', ''), args.get('notes', ''), path=self.apps_path)
             elif name == 'delete_application':
-                result = delete_application(args['id'])
-                return result
+                result = delete_application(args['id'], path=self.apps_path)
+            elif name == 'search_docs':
+                result = search_docs(args['query'])
             else:
                 return 'Неизвестная инструкция'
+            return result
         except KeyError:
             return 'Неверно переданы аргументы'
 
-    def handle_tool_calls(self, message):
+    async def handle_tool_calls(self, message):
         for call in message.tool_calls:
             name = call.function.name
             try:
@@ -250,24 +274,24 @@ id, компания, должность, дата, статус, заметка
                 'tool_call_id': call.id,
                 'content': result
             })
-        return self.ask_model()
+        return await self.ask_model()
 
-    def chat(self, user_message):
+    async def chat(self, user_message):
         self.messages.append({
             'role': 'user',
             'content': user_message
         })
-        message = self.ask_model()
+        message = await self.ask_model()
         if message.tool_calls:
             self.messages.append(message.model_dump())
-            message = self.handle_tool_calls(message)
+            message = await self.handle_tool_calls(message)
         self.messages.append({
             'role': 'assistant',
             'content': message.content
         })
         return message.content
 
-    def run(self):
+    async def run(self):
         self.load_messages()
         user_message = input('Ваш ввод: ')
         while user_message != 'выход':
@@ -275,10 +299,11 @@ id, компания, должность, дата, статус, заметка
                 print(self.clear())
                 self.messages = [self.messages[0]]
             else:
-                print(self.chat(user_message))
+                print(await self.chat(user_message))
                 self.save()
             user_message = input('Ваш ввод: ')
 
 
-agent = Agent()
-agent.run()
+if __name__ == "__main__":
+    agent = Agent()
+    asyncio.run(agent.run())
